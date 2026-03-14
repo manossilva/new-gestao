@@ -6,7 +6,7 @@ export function useProfile() {
   const { user, refreshProfile } = useAuth()
   const [uploading, setUploading] = useState(false)
 
-  const updateProfile = async (updates: { name?: string; photo_url?: string; company_name?: string }) => {
+  const updateProfile = async (updates: Record<string, string | null | undefined>) => {
     if (!user) return { error: new Error('Not authenticated') }
     const { error } = await supabase
       .from('profiles')

@@ -11,6 +11,7 @@ import { Card } from '../components/ui/Card'
 interface ProfileForm {
   name: string
   company_name: string
+  pj1_company_name: string
 }
 
 interface PasswordForm {
@@ -26,11 +27,13 @@ export default function Configuracoes() {
   const [passwordSaving, setPasswordSaving] = useState(false)
   const [successMsg, setSuccessMsg] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
+  const isRamon = profile?.role === 'ramon'
 
   const profileForm = useForm<ProfileForm>({
     values: {
       name: profile?.name || '',
       company_name: profile?.company_name || 'Gestão Interna',
+      pj1_company_name: profile?.pj1_company_name || 'PJ1 — Empresa',
     },
   })
 
@@ -50,11 +53,17 @@ export default function Configuracoes() {
 
   const onSubmitProfile = async (data: ProfileForm) => {
     setProfileSaving(true)
-    const { error } = await updateProfile({ name: data.name, company_name: data.company_name })
+    const updates: Record<string, string> = {
+      name: data.name,
+      company_name: data.company_name,
+    }
+    if (isRamon) {
+      updates.pj1_company_name = data.pj1_company_name
+    }
+    const { error } = await updateProfile(updates)
     if (error) {
       showError('Erro ao salvar perfil.')
     } else {
-      // Update company settings table too
       await supabase.from('company_settings').upsert({ id: 1, company_name: data.company_name, updated_at: new Date().toISOString() })
       showSuccess('Perfil atualizado com sucesso!')
     }
@@ -66,7 +75,7 @@ export default function Configuracoes() {
     if (!file) return
     const { url, error } = await uploadPhoto(file)
     if (error) {
-      showError('Erro ao fazer upload da foto.')
+      showError(`Erro ao fazer upload: ${(error as any).message || 'verifique as políticas do Supabase Storage'}`)
     } else if (url) {
       await updateProfile({ photo_url: url })
       showSuccess('Foto atualizada!')
@@ -104,7 +113,6 @@ export default function Configuracoes() {
         <p className="text-zinc-400 text-sm mt-1">Gerencie seu perfil e preferências</p>
       </div>
 
-      {/* Success/Error messages */}
       {successMsg && (
         <div className="bg-green-900/30 border border-green-800 rounded-lg p-3">
           <p className="text-green-400 text-sm">{successMsg}</p>
@@ -170,25 +178,38 @@ export default function Configuracoes() {
 
         <form onSubmit={profileForm.handleSubmit(onSubmitProfile)} className="space-y-4">
           <Input
-            label="Nome"
-            placeholder="Seu nome"
+            label="Seu Nome"
+            placeholder="Seu nome completo"
             error={profileForm.formState.errors.name?.message}
             {...profileForm.register('name', { required: 'Nome é obrigatório' })}
           />
 
-          <div className="flex items-center gap-2 mb-2">
-            <Building2 size={16} className="text-zinc-400" />
-            <span className="text-zinc-300 text-sm font-medium">Empresa</span>
+          <div className="pt-2 border-t border-zinc-800">
+            <div className="flex items-center gap-2 mb-3">
+              <Building2 size={16} className="text-amber-400" />
+              <span className="text-white text-sm font-semibold">Empresas</span>
+            </div>
+
+            <div className="space-y-3">
+              <Input
+                label="Nome da Empresa (PJ2 — Sociedade)"
+                placeholder="Ex: Silva & Associados"
+                {...profileForm.register('company_name')}
+              />
+
+              {isRamon && (
+                <Input
+                  label="Nome da Empresa (PJ1 — Sua Empresa Individual)"
+                  placeholder="Ex: Ramon Silva ME"
+                  {...profileForm.register('pj1_company_name')}
+                />
+              )}
+            </div>
           </div>
-          <Input
-            label="Nome da Empresa"
-            placeholder="Nome da empresa"
-            {...profileForm.register('company_name')}
-          />
 
           <div className="pt-2">
             <Button type="submit" loading={profileSaving}>
-              <Save size={16} /> Salvar Perfil
+              <Save size={16} /> Salvar Alterações
             </Button>
           </div>
         </form>
@@ -226,6 +247,17 @@ export default function Configuracoes() {
           </div>
         </form>
       </Card>
+
+      {/* Storage notice */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+        <p className="text-zinc-500 text-xs">
+          <span className="text-amber-400 font-medium">Nota sobre foto:</span> Para upload de fotos funcionar, execute no Supabase SQL Editor:
+          <br/>
+          <code className="text-zinc-400 text-xs">
+            create policy "uploads" on storage.objects for insert to authenticated with check (bucket_id = 'avatars');
+          </code>
+        </p>
+      </div>
     </div>
   )
 }

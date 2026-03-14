@@ -145,3 +145,31 @@ create policy "Owner can manage personal tasks" on kanban_tarefas
 -- After creating users in auth.users, manually set their role in profiles:
 -- update profiles set role = 'ramon', name = 'Ramon' where id = '<ramon-uuid>';
 -- update profiles set role = 'mano', name = 'Mano' where id = '<mano-uuid>';
+
+-- Storage policies for avatars bucket
+create policy "Allow authenticated uploads to avatars" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'avatars');
+
+create policy "Allow public reads on avatars" on storage.objects
+  for select to public
+  using (bucket_id = 'avatars');
+
+create policy "Allow authenticated updates on avatars" on storage.objects
+  for update to authenticated
+  using (bucket_id = 'avatars');
+
+create policy "Allow authenticated deletes on avatars" on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'avatars');
+
+-- Add pj1_company_name to profiles (Ramon's company name)
+alter table profiles add column if not exists pj1_company_name text default 'PJ1 — Empresa';
+
+-- Add pj1_company_name column to profiles if not exists
+-- alter table profiles add column if not exists pj1_company_name text default 'PJ1 — Empresa';
+
+-- Storage policies (run these if you get upload errors):
+-- create policy "Allow uploads" on storage.objects for insert to authenticated with check (bucket_id = 'avatars');
+-- create policy "Allow reads" on storage.objects for select to public using (bucket_id = 'avatars');
+-- create policy "Allow updates" on storage.objects for update to authenticated using (bucket_id = 'avatars');

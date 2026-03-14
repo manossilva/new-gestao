@@ -6,6 +6,7 @@ export interface Profile {
   photo_url: string | null
   role: UserRole | null
   company_name: string | null
+  pj1_company_name: string | null
   created_at: string
   updated_at: string
 }
