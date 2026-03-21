@@ -3,13 +3,11 @@ import {
   LayoutDashboard,
   User,
   Building2,
-  Users,
-  CheckSquare,
-  ListTodo,
   Settings,
   LogOut,
   X,
   Briefcase,
+  BarChart3,
 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 
@@ -28,15 +26,13 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
   }
 
   const navItems = [
-    { to: '/dashboard', icon: <LayoutDashboard size={20} />, label: 'Dashboard' },
-    { to: '/pf', icon: <User size={20} />, label: 'PF' },
+    { to: '/dashboard', icon: <LayoutDashboard size={18} />, label: 'Dashboard' },
+    { to: '/pf', icon: <User size={18} />, label: 'PF — Pessoal' },
     ...(profile?.role === 'ramon'
-      ? [{ to: '/pj1', icon: <Briefcase size={20} />, label: 'PJ1' }]
+      ? [{ to: '/pj1', icon: <Briefcase size={18} />, label: profile?.pj1_company_name || 'PJ1' }]
       : []),
-    { to: '/pj2', icon: <Building2 size={20} />, label: 'PJ2 - Sociedade' },
-    { to: '/tarefas-equipe', icon: <Users size={20} />, label: 'Tarefas da Equipe' },
-    { to: '/minhas-tarefas', icon: <ListTodo size={20} />, label: 'Minhas Tarefas' },
-    { to: '/configuracoes', icon: <Settings size={20} />, label: 'Configurações' },
+    { to: '/pj2', icon: <Building2 size={18} />, label: 'PJ2 — Sociedade' },
+    { to: '/configuracoes', icon: <Settings size={18} />, label: 'Configurações' },
   ]
 
   const initials = profile?.name
@@ -46,39 +42,38 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
       {/* Logo */}
-      <div className="flex items-center justify-between p-5 border-b border-zinc-800">
+      <div className="flex items-center justify-between px-5 py-5 border-b border-white/5">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-purple-600 rounded-lg flex items-center justify-center">
-            <CheckSquare size={18} className="text-white" />
+          <div className="w-8 h-8 bg-purple-600 rounded-xl flex items-center justify-center shadow-lg shadow-purple-600/20">
+            <BarChart3 size={16} className="text-white" />
           </div>
           <div>
-            <p className="text-white font-bold text-sm leading-tight">
+            <p className="text-white font-semibold text-sm leading-tight tracking-tight">
               {profile?.company_name || 'Gestão Interna'}
             </p>
-            <p className="text-zinc-500 text-xs">Sistema Interno</p>
+            <p className="text-zinc-500 text-xs mt-0.5">Sistema Financeiro</p>
           </div>
         </div>
-        {/* Close button (mobile) */}
         <button
           onClick={onClose}
-          className="lg:hidden text-zinc-400 hover:text-white p-1"
+          className="lg:hidden text-zinc-500 hover:text-white p-1 rounded-lg hover:bg-white/5 transition-all duration-150"
         >
-          <X size={20} />
+          <X size={18} />
         </button>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+      <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
         {navItems.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
             onClick={onClose}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 ${
                 isActive
-                  ? 'bg-purple-600/20 text-purple-400 border border-purple-600/30'
-                  : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                  ? 'bg-purple-600/15 text-purple-400'
+                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-white/5'
               }`
             }
           >
@@ -89,16 +84,16 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
       </nav>
 
       {/* User section */}
-      <div className="p-3 border-t border-zinc-800">
-        <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg">
+      <div className="p-3 border-t border-white/5">
+        <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-white/5 transition-all duration-150">
           {profile?.photo_url ? (
             <img
               src={profile.photo_url}
               alt={profile.name || 'User'}
-              className="w-8 h-8 rounded-full object-cover ring-2 ring-purple-600/50"
+              className="w-8 h-8 rounded-full object-cover ring-2 ring-purple-500/30"
             />
           ) : (
-            <div className="w-8 h-8 bg-purple-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
+            <div className="w-8 h-8 bg-purple-600 rounded-full flex items-center justify-center text-white text-xs font-semibold">
               {initials}
             </div>
           )}
@@ -110,10 +105,10 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
           </div>
           <button
             onClick={handleSignOut}
-            className="text-zinc-500 hover:text-red-400 transition-colors p-1"
+            className="text-zinc-600 hover:text-red-400 transition-colors duration-150 p-1 rounded-lg"
             title="Sair"
           >
-            <LogOut size={16} />
+            <LogOut size={15} />
           </button>
         </div>
       </div>
@@ -123,7 +118,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden lg:flex flex-col w-64 bg-zinc-900 border-r border-zinc-800 h-full fixed left-0 top-0 z-30">
+      <aside className="hidden lg:flex flex-col w-64 bg-zinc-950 border-r border-white/5 h-full fixed left-0 top-0 z-30">
         <SidebarContent />
       </aside>
 
@@ -134,7 +129,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={onClose}
           />
-          <aside className="relative w-72 bg-zinc-900 border-r border-zinc-800 h-full flex flex-col z-50">
+          <aside className="relative w-72 bg-zinc-950 border-r border-white/5 h-full flex flex-col z-50">
             <SidebarContent />
           </aside>
         </div>

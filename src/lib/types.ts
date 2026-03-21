@@ -45,6 +45,9 @@ export interface Pj2Servico {
   gastos: number
   imposto: number
   data_vencimento: string | null
+  pago: boolean
+  impostos_pagos: boolean
+  forma_pagamento: string | null
   created_at: string
   pj2_clientes?: Pj2Cliente
 }

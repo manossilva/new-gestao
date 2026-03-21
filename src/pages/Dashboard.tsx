@@ -1,9 +1,17 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  LineChart, Line, Legend,
 } from 'recharts'
-import { DollarSign, TrendingUp, Wallet, ArrowUpRight, Calendar, AlertCircle } from 'lucide-react'
-import { format, parseISO, startOfMonth, endOfMonth, isWithinInterval, addDays, isBefore } from 'date-fns'
+import {
+  DollarSign, TrendingUp, Wallet, ArrowUpRight, Calendar, AlertCircle,
+  ChevronLeft, ChevronRight, CheckCircle2, Clock, Receipt, TrendingDown,
+  CreditCard,
+} from 'lucide-react'
+import {
+  format, parseISO, startOfMonth, endOfMonth, isWithinInterval,
+  addMonths, subMonths, addDays, isBefore,
+} from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { useAuth } from '../hooks/useAuth'
 import { supabase } from '../lib/supabase'
@@ -14,26 +22,35 @@ function formatBRL(value: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value)
 }
 
-function groupByMonth(items: { data?: string; created_at?: string; valor: number }[]) {
-  const map: Record<string, number> = {}
-  items.forEach(item => {
-    const dateStr = item.data || item.created_at?.split('T')[0] || ''
-    if (!dateStr) return
+function filterByDate(
+  items: Array<{ data?: string; data_vencimento?: string | null; created_at?: string }>,
+  start: Date,
+  end: Date,
+  field: 'data' | 'data_vencimento' = 'data',
+) {
+  return items.filter(item => {
+    const dateStr =
+      field === 'data_vencimento'
+        ? (item.data_vencimento || item.created_at?.split('T')[0])
+        : (item.data || item.created_at?.split('T')[0])
+    if (!dateStr) return false
     try {
-      const month = format(parseISO(dateStr), 'MMM/yy', { locale: ptBR })
-      map[month] = (map[month] || 0) + Number(item.valor)
-    } catch {}
+      return isWithinInterval(parseISO(dateStr), { start, end })
+    } catch {
+      return false
+    }
   })
-  return Object.entries(map).map(([mes, total]) => ({ mes, total })).slice(-6)
 }
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
     return (
-      <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-3 text-sm">
-        <p className="text-zinc-400 mb-1">{label}</p>
+      <div className="bg-zinc-900 border border-white/10 rounded-xl p-3 text-sm shadow-xl">
+        <p className="text-zinc-400 mb-2 text-xs font-medium uppercase tracking-wide">{label}</p>
         {payload.map((p: any, i: number) => (
-          <p key={i} className="font-semibold" style={{ color: p.color }}>{formatBRL(p.value)}</p>
+          <p key={i} className="font-semibold tabular-nums" style={{ color: p.color }}>
+            {p.name}: {formatBRL(p.value)}
+          </p>
         ))}
       </div>
     )
@@ -47,11 +64,23 @@ interface ServicoPendente extends Pj2Servico {
 
 export default function Dashboard() {
   const { profile } = useAuth()
-  const [activeTab, setActiveTab] = useState<'pf' | 'pj1' | 'pj2'>('pf')
+  const [activeTab, setActiveTab] = useState<'pf' | 'pj1' | 'empresa'>('pf')
   const [pfReceitas, setPfReceitas] = useState<PfReceita[]>([])
   const [pj1Receitas, setPj1Receitas] = useState<Pj1Receita[]>([])
   const [pj2Servicos, setPj2Servicos] = useState<ServicoPendente[]>([])
   const [loading, setLoading] = useState(true)
+
+  // Month navigation
+  const [selectedDate, setSelectedDate] = useState(() => new Date())
+  const monthStart = startOfMonth(selectedDate)
+  const monthEnd = endOfMonth(selectedDate)
+  const isCurrentMonth =
+    format(selectedDate, 'yyyy-MM') === format(new Date(), 'yyyy-MM')
+  const isFutureMonth = selectedDate > endOfMonth(new Date())
+
+  const goToPrev = () => setSelectedDate(d => subMonths(d, 1))
+  const goToNext = () => { if (!isCurrentMonth) setSelectedDate(d => addMonths(d, 1)) }
+  const goToToday = () => setSelectedDate(new Date())
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -63,6 +92,9 @@ export default function Dashboard() {
       setPfReceitas((pfRes.data as PfReceita[]) || [])
       const servicos = (pj2Res.data || []).map((s: any) => ({
         ...s,
+        pago: s.pago ?? false,
+        impostos_pagos: s.impostos_pagos ?? false,
+        forma_pagamento: s.forma_pagamento ?? null,
         cliente: s.pj2_clientes,
       }))
       setPj2Servicos(servicos)
@@ -76,47 +108,53 @@ export default function Dashboard() {
     if (profile) fetchAll()
   }, [profile])
 
-  const now = new Date()
-  const monthStart = startOfMonth(now)
-  const monthEnd = endOfMonth(now)
-  const thirtyDaysLater = addDays(now, 30)
+  // ── PF ─────────────────────────────────────────────────────────────────────
+  const pfFiltered = filterByDate(pfReceitas, monthStart, monthEnd) as PfReceita[]
+  const pfFaturamento = pfFiltered.reduce((s, r) => s + Number(r.valor), 0)
 
-  const tabs = [
-    { id: 'pf', label: 'PF' },
-    ...(profile?.role === 'ramon' ? [{ id: 'pj1', label: profile?.pj1_company_name || 'PJ1' }] : []),
-    { id: 'pj2', label: profile?.company_name || 'PJ2 — Sociedade' },
-  ] as { id: 'pf' | 'pj1' | 'pj2'; label: string }[]
+  // ── PJ1 ────────────────────────────────────────────────────────────────────
+  const pj1Filtered = filterByDate(pj1Receitas, monthStart, monthEnd) as Pj1Receita[]
+  const pj1Faturamento = pj1Filtered.reduce((s, r) => s + Number(r.valor), 0)
 
-  // PF stats
-  const pfTotal = pfReceitas.reduce((s, r) => s + Number(r.valor), 0)
-  const pfThisMonth = pfReceitas
-    .filter(r => { try { return isWithinInterval(parseISO(r.data), { start: monthStart, end: monthEnd }) } catch { return false } })
-    .reduce((s, r) => s + Number(r.valor), 0)
+  // ── PJ2 ────────────────────────────────────────────────────────────────────
+  const pj2Filtered = filterByDate(pj2Servicos, monthStart, monthEnd, 'data_vencimento') as ServicoPendente[]
+  const pj2Faturamento = pj2Filtered.reduce((s, sv) => s + Number(sv.valor_fechado), 0)
+  const pj2Despesas = pj2Filtered.reduce((s, sv) => s + Number(sv.gastos), 0)
+  const pj2Impostos = pj2Filtered.reduce((s, sv) => s + Number(sv.imposto), 0)
+  const pj2DespeJustMaisImp = pj2Despesas + pj2Impostos
+  const pj2Lucro = pj2Faturamento - pj2DespeJustMaisImp
+  const pj2Recebido = pj2Filtered.filter(s => s.pago).reduce((s, sv) => s + Number(sv.valor_fechado), 0)
+  const pj2AReceber = pj2Filtered.filter(s => !s.pago).reduce((s, sv) => s + Number(sv.valor_fechado), 0)
+  const pj2ImpostosPagos = pj2Filtered.filter(s => s.impostos_pagos).reduce((s, sv) => s + Number(sv.imposto), 0)
+  const pj2ImpostosAPagar = pj2Impostos - pj2ImpostosPagos
 
-  // PJ1 stats
-  const pj1Total = pj1Receitas.reduce((s, r) => s + Number(r.valor), 0)
-  const pj1ThisMonth = pj1Receitas
-    .filter(r => { try { return isWithinInterval(parseISO(r.data), { start: monthStart, end: monthEnd }) } catch { return false } })
-    .reduce((s, r) => s + Number(r.valor), 0)
+  // ── Chart data: last 6 months ──────────────────────────────────────────────
+  const chartData = useMemo(() => {
+    return Array.from({ length: 6 }, (_, i) => {
+      const d = subMonths(new Date(), 5 - i)
+      const start = startOfMonth(d)
+      const end = endOfMonth(d)
+      const label = format(d, 'MMM', { locale: ptBR })
 
-  // PJ2 stats
-  const pj2ValorFechado = pj2Servicos.reduce((s, sv) => s + Number(sv.valor_fechado), 0)
-  const pj2Gastos = pj2Servicos.reduce((s, sv) => s + Number(sv.gastos), 0)
-  const pj2Impostos = pj2Servicos.reduce((s, sv) => s + Number(sv.imposto), 0)
-  const pj2Lucro = pj2ValorFechado - pj2Gastos - pj2Impostos
-  const lucroSocio = pj2Lucro / 2
+      const pfMonth = (filterByDate(pfReceitas, start, end) as PfReceita[])
+        .reduce((s, r) => s + Number(r.valor), 0)
+      const pj1Month = (filterByDate(pj1Receitas, start, end) as Pj1Receita[])
+        .reduce((s, r) => s + Number(r.valor), 0)
+      const pj2Month = filterByDate(pj2Servicos, start, end, 'data_vencimento') as ServicoPendente[]
+      const pj2Fat = pj2Month.reduce((s, sv) => s + Number(sv.valor_fechado), 0)
+      const pj2Lucr = pj2Month.reduce((s, sv) => s + Number(sv.valor_fechado) - Number(sv.gastos) - Number(sv.imposto), 0)
+      const pj2Desp = pj2Month.reduce((s, sv) => s + Number(sv.gastos), 0)
+      const pj2Imp = pj2Month.reduce((s, sv) => s + Number(sv.imposto), 0)
 
-  const pj2ThisMonth = pj2Servicos
-    .filter(s => {
-      const dateStr = s.data_vencimento || s.created_at?.split('T')[0]
-      if (!dateStr) return false
-      try { return isWithinInterval(parseISO(dateStr), { start: monthStart, end: monthEnd }) } catch { return false }
+      return { mes: label, pf: pfMonth, pj1: pj1Month, faturamento: pj2Fat, lucro: pj2Lucr, despesas: pj2Desp, impostos: pj2Imp }
     })
-    .reduce((s, sv) => s + (Number(sv.valor_fechado) - Number(sv.gastos) - Number(sv.imposto)), 0)
+  }, [pfReceitas, pj1Receitas, pj2Servicos])
 
-  // Upcoming payments (next 30 days)
+  // ── Upcoming payments (next 30 days, PJ2 unpaid) ──────────────────────────
+  const now = new Date()
+  const thirtyDaysLater = addDays(now, 30)
   const upcomingPayments = pj2Servicos.filter(s => {
-    if (!s.data_vencimento) return false
+    if (!s.data_vencimento || s.pago) return false
     try {
       const due = parseISO(s.data_vencimento)
       return !isBefore(due, now) && isBefore(due, thirtyDaysLater)
@@ -126,31 +164,67 @@ export default function Dashboard() {
     return parseISO(a.data_vencimento).getTime() - parseISO(b.data_vencimento).getTime()
   })
 
+  const tabs = [
+    { id: 'pf' as const, label: 'PF — CPF' },
+    ...(profile?.role === 'ramon' ? [{ id: 'pj1' as const, label: `${profile?.pj1_company_name || 'PJ1'} — CNPJ` }] : []),
+    { id: 'empresa' as const, label: profile?.company_name || 'Empresa' },
+  ]
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="w-8 h-8 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
+        <div className="w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
       </div>
     )
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-        <p className="text-zinc-400 text-sm mt-1">Visão geral financeira • {format(now, "MMMM 'de' yyyy", { locale: ptBR })}</p>
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white tracking-tight">Dashboard</h1>
+          <p className="text-zinc-500 text-sm mt-0.5">Demonstrativo financeiro mensal</p>
+        </div>
+
+        {/* Month Navigator */}
+        <div className="flex items-center gap-1 bg-zinc-900 border border-white/5 rounded-2xl p-1">
+          <button
+            onClick={goToPrev}
+            className="w-8 h-8 flex items-center justify-center rounded-xl text-zinc-400 hover:text-white hover:bg-white/5"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <button
+            onClick={goToToday}
+            className="px-3 py-1.5 text-sm font-medium text-white min-w-[140px] text-center capitalize hover:text-purple-400 transition-colors"
+          >
+            {format(selectedDate, 'MMMM yyyy', { locale: ptBR })}
+          </button>
+          <button
+            onClick={goToNext}
+            disabled={isCurrentMonth}
+            className={`w-8 h-8 flex items-center justify-center rounded-xl transition-colors ${
+              isCurrentMonth
+                ? 'text-zinc-700 cursor-not-allowed'
+                : 'text-zinc-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1 w-fit flex-wrap">
+      {/* Entity Tabs */}
+      <div className="flex gap-1 bg-zinc-900 border border-white/5 rounded-2xl p-1 w-fit flex-wrap">
         {tabs.map(tab => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all duration-150 ${
               activeTab === tab.id
-                ? 'bg-purple-600 text-white'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/20'
+                : 'text-zinc-400 hover:text-zinc-100 hover:bg-white/5'
             }`}
           >
             {tab.label}
@@ -158,120 +232,290 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* PF Tab */}
+      {/* ── PF TAB ───────────────────────────────────────────────────────────── */}
       {activeTab === 'pf' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard title="Total Recebido PF" value={formatBRL(pfTotal)} icon={<DollarSign size={20} />} accent />
-            <StatCard title="Este Mês" value={formatBRL(pfThisMonth)} icon={<Calendar size={20} />} />
-            <StatCard title="Receitas Cadastradas" value={pfReceitas.length.toString()} icon={<TrendingUp size={20} />} />
-            <StatCard title="Média por Receita" value={pfReceitas.length > 0 ? formatBRL(pfTotal / pfReceitas.length) : 'R$ 0,00'} icon={<Wallet size={20} />} />
+        <div className="space-y-5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <StatCard
+              title="Faturamento do Mês"
+              value={formatBRL(pfFaturamento)}
+              icon={<DollarSign size={16} />}
+              color="purple"
+            />
+            <StatCard
+              title="Receitas no Mês"
+              value={pfFiltered.length.toString()}
+              icon={<Receipt size={16} />}
+              color="blue"
+            />
+            <StatCard
+              title="Média por Receita"
+              value={pfFiltered.length > 0 ? formatBRL(pfFaturamento / pfFiltered.length) : 'R$ 0,00'}
+              icon={<TrendingUp size={16} />}
+              color="green"
+            />
           </div>
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-            <h3 className="text-white font-semibold mb-4">Entradas por Mês — PF</h3>
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={groupByMonth(pfReceitas.map(r => ({ data: r.data, valor: r.valor })))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis dataKey="mes" stroke="#71717a" tick={{ fontSize: 12 }} />
-                <YAxis stroke="#71717a" tick={{ fontSize: 12 }} tickFormatter={v => `R$${(v/1000).toFixed(0)}k`} />
+          {/* Chart */}
+          <div className="bg-zinc-900 border border-white/5 rounded-2xl p-5">
+            <h3 className="text-white font-semibold mb-1 text-sm">Faturamento PF — últimos 6 meses</h3>
+            <p className="text-zinc-500 text-xs mb-5">Entradas registradas no CPF</p>
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="mes" stroke="#52525b" tick={{ fontSize: 11, fill: '#71717a' }} />
+                <YAxis stroke="#52525b" tick={{ fontSize: 11, fill: '#71717a' }} tickFormatter={v => `R$${(v / 1000).toFixed(0)}k`} />
                 <Tooltip content={<CustomTooltip />} />
-                <Line type="monotone" dataKey="total" stroke="#7c3aed" strokeWidth={2} dot={{ fill: '#7c3aed' }} />
+                <Line type="monotone" dataKey="pf" name="PF" stroke="#a855f7" strokeWidth={2} dot={{ fill: '#a855f7', r: 3 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl">
-            <div className="p-5 border-b border-zinc-800">
-              <h3 className="text-white font-semibold">Últimas Receitas PF</h3>
+          {/* Transaction list */}
+          <div className="bg-zinc-900 border border-white/5 rounded-2xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
+              <h3 className="text-white font-semibold text-sm">Receitas de {format(selectedDate, 'MMMM', { locale: ptBR })}</h3>
+              <span className="text-zinc-500 text-xs">{pfFiltered.length} registro{pfFiltered.length !== 1 ? 's' : ''}</span>
             </div>
-            <div className="divide-y divide-zinc-800">
-              {pfReceitas.slice(0, 5).map(r => (
-                <div key={r.id} className="flex items-center justify-between px-5 py-3">
-                  <div>
-                    <p className="text-white text-sm font-medium">{r.descricao}</p>
-                    <p className="text-zinc-500 text-xs">{r.forma_pagamento} • {format(parseISO(r.data), 'dd/MM/yyyy')}</p>
+            <div className="divide-y divide-white/5">
+              {pfFiltered.length === 0 ? (
+                <p className="text-zinc-500 text-sm text-center py-10">Nenhuma receita neste mês</p>
+              ) : (
+                pfFiltered.map(r => (
+                  <div key={r.id} className="flex items-center justify-between px-5 py-3 hover:bg-white/[0.02]">
+                    <div>
+                      <p className="text-white text-sm font-medium">{r.descricao}</p>
+                      <p className="text-zinc-500 text-xs mt-0.5">
+                        {r.forma_pagamento} · {format(parseISO(r.data), 'dd/MM/yyyy')}
+                      </p>
+                    </div>
+                    <span className="text-green-400 font-semibold text-sm tabular-nums">{formatBRL(Number(r.valor))}</span>
                   </div>
-                  <span className="text-green-400 font-semibold text-sm">{formatBRL(Number(r.valor))}</span>
-                </div>
-              ))}
-              {pfReceitas.length === 0 && (
-                <p className="text-zinc-500 text-sm text-center py-8">Nenhuma receita cadastrada</p>
+                ))
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* PJ1 Tab (Ramon only) */}
+      {/* ── PJ1 TAB (Ramon only) ─────────────────────────────────────────────── */}
       {activeTab === 'pj1' && profile?.role === 'ramon' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard title={`Total ${profile?.pj1_company_name || 'PJ1'}`} value={formatBRL(pj1Total)} icon={<DollarSign size={20} />} accent />
-            <StatCard title="Este Mês" value={formatBRL(pj1ThisMonth)} icon={<Calendar size={20} />} />
-            <StatCard title="Receitas Cadastradas" value={pj1Receitas.length.toString()} icon={<TrendingUp size={20} />} />
-            <StatCard title="Média por Receita" value={pj1Receitas.length > 0 ? formatBRL(pj1Total / pj1Receitas.length) : 'R$ 0,00'} icon={<Wallet size={20} />} />
+        <div className="space-y-5">
+          {/* CPF vs CNPJ comparison */}
+          <div className="bg-zinc-900 border border-white/5 rounded-2xl p-5">
+            <h3 className="text-white font-semibold text-sm mb-1">CPF vs CNPJ — {format(selectedDate, 'MMMM yyyy', { locale: ptBR })}</h3>
+            <p className="text-zinc-500 text-xs mb-5">Movimentação total entre suas entidades</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-zinc-800/50 rounded-xl p-4">
+                <p className="text-zinc-400 text-xs font-medium uppercase tracking-wide mb-2">PF — CPF</p>
+                <p className="text-2xl font-bold text-purple-400 tabular-nums">{formatBRL(pfFaturamento)}</p>
+                <p className="text-zinc-500 text-xs mt-1">{pfFiltered.length} receita{pfFiltered.length !== 1 ? 's' : ''}</p>
+              </div>
+              <div className="bg-zinc-800/50 rounded-xl p-4">
+                <p className="text-zinc-400 text-xs font-medium uppercase tracking-wide mb-2">{profile?.pj1_company_name || 'PJ1'} — CNPJ</p>
+                <p className="text-2xl font-bold text-amber-400 tabular-nums">{formatBRL(pj1Faturamento)}</p>
+                <p className="text-zinc-500 text-xs mt-1">{pj1Filtered.length} receita{pj1Filtered.length !== 1 ? 's' : ''}</p>
+              </div>
+              <div className="bg-purple-600/10 border border-purple-500/20 rounded-xl p-4">
+                <p className="text-zinc-400 text-xs font-medium uppercase tracking-wide mb-2">Total Movimentado</p>
+                <p className="text-2xl font-bold text-white tabular-nums">{formatBRL(pfFaturamento + pj1Faturamento)}</p>
+                <p className="text-zinc-500 text-xs mt-1">CPF + CNPJ</p>
+              </div>
+            </div>
           </div>
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-            <h3 className="text-white font-semibold mb-4">Entradas por Mês — {profile?.pj1_company_name || 'PJ1'}</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <StatCard
+              title={`${profile?.pj1_company_name || 'PJ1'} — CNPJ`}
+              value={formatBRL(pj1Faturamento)}
+              icon={<DollarSign size={16} />}
+              color="amber"
+            />
+            <StatCard
+              title="Média por Receita CNPJ"
+              value={pj1Filtered.length > 0 ? formatBRL(pj1Faturamento / pj1Filtered.length) : 'R$ 0,00'}
+              icon={<TrendingUp size={16} />}
+              color="purple"
+            />
+          </div>
+
+          {/* CPF vs CNPJ Chart */}
+          <div className="bg-zinc-900 border border-white/5 rounded-2xl p-5">
+            <h3 className="text-white font-semibold text-sm mb-1">CPF vs CNPJ — últimos 6 meses</h3>
+            <p className="text-zinc-500 text-xs mb-5">Comparativo mensal de entradas</p>
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={groupByMonth(pj1Receitas.map(r => ({ data: r.data, valor: r.valor })))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis dataKey="mes" stroke="#71717a" tick={{ fontSize: 12 }} />
-                <YAxis stroke="#71717a" tick={{ fontSize: 12 }} tickFormatter={v => `R$${(v/1000).toFixed(0)}k`} />
+              <BarChart data={chartData} barGap={4}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="mes" stroke="#52525b" tick={{ fontSize: 11, fill: '#71717a' }} />
+                <YAxis stroke="#52525b" tick={{ fontSize: 11, fill: '#71717a' }} tickFormatter={v => `R$${(v / 1000).toFixed(0)}k`} />
                 <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="total" fill="#7c3aed" radius={[4, 4, 0, 0]} />
+                <Legend wrapperStyle={{ fontSize: 12, color: '#71717a' }} />
+                <Bar dataKey="pf" name="CPF (PF)" fill="#a855f7" radius={[4, 4, 0, 0]} maxBarSize={32} />
+                <Bar dataKey="pj1" name={`CNPJ (${profile?.pj1_company_name || 'PJ1'})`} fill="#f59e0b" radius={[4, 4, 0, 0]} maxBarSize={32} />
               </BarChart>
             </ResponsiveContainer>
           </div>
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl">
-            <div className="p-5 border-b border-zinc-800">
-              <h3 className="text-white font-semibold">Últimas Receitas {profile?.pj1_company_name || 'PJ1'}</h3>
+          {/* PJ1 transaction list */}
+          <div className="bg-zinc-900 border border-white/5 rounded-2xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
+              <h3 className="text-white font-semibold text-sm">Receitas CNPJ — {format(selectedDate, 'MMMM', { locale: ptBR })}</h3>
+              <span className="text-zinc-500 text-xs">{pj1Filtered.length} registro{pj1Filtered.length !== 1 ? 's' : ''}</span>
             </div>
-            <div className="divide-y divide-zinc-800">
-              {pj1Receitas.slice(0, 5).map(r => (
-                <div key={r.id} className="flex items-center justify-between px-5 py-3">
-                  <div>
-                    <p className="text-white text-sm font-medium">{r.descricao}</p>
-                    <p className="text-zinc-500 text-xs">Pago por: {r.quem_pagou} • {format(parseISO(r.data), 'dd/MM/yyyy')}</p>
+            <div className="divide-y divide-white/5">
+              {pj1Filtered.length === 0 ? (
+                <p className="text-zinc-500 text-sm text-center py-10">Nenhuma receita neste mês</p>
+              ) : (
+                pj1Filtered.map(r => (
+                  <div key={r.id} className="flex items-center justify-between px-5 py-3 hover:bg-white/[0.02]">
+                    <div>
+                      <p className="text-white text-sm font-medium">{r.descricao}</p>
+                      <p className="text-zinc-500 text-xs mt-0.5">
+                        {r.quem_pagou} · {format(parseISO(r.data), 'dd/MM/yyyy')}
+                      </p>
+                    </div>
+                    <span className="text-green-400 font-semibold text-sm tabular-nums">{formatBRL(Number(r.valor))}</span>
                   </div>
-                  <span className="text-green-400 font-semibold text-sm">{formatBRL(Number(r.valor))}</span>
-                </div>
-              ))}
-              {pj1Receitas.length === 0 && (
-                <p className="text-zinc-500 text-sm text-center py-8">Nenhuma receita cadastrada</p>
+                ))
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* PJ2 Tab */}
-      {activeTab === 'pj2' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard title="Valor Fechado Total" value={formatBRL(pj2ValorFechado)} icon={<Wallet size={20} />} />
-            <StatCard title="Total Gastos + Impostos" value={formatBRL(pj2Gastos + pj2Impostos)} icon={<ArrowUpRight size={20} />} />
-            <StatCard title="Lucro Total da Empresa" value={formatBRL(pj2Lucro)} icon={<TrendingUp size={20} />} accent />
-            <StatCard title="Lucro Este Mês" value={formatBRL(pj2ThisMonth)} icon={<Calendar size={20} />} />
+      {/* ── EMPRESA TAB (PJ2) ─────────────────────────────────────────────────── */}
+      {activeTab === 'empresa' && (
+        <div className="space-y-5">
+          {/* Financial Breakdown Cards */}
+          <div>
+            <p className="text-zinc-500 text-xs font-medium uppercase tracking-wider mb-3">Demonstrativo — {format(selectedDate, 'MMMM yyyy', { locale: ptBR })}</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              <StatCard
+                title="Faturamento"
+                value={formatBRL(pj2Faturamento)}
+                icon={<DollarSign size={14} />}
+                color="blue"
+              />
+              <StatCard
+                title="Despesas"
+                value={formatBRL(pj2Despesas)}
+                icon={<TrendingDown size={14} />}
+                color="red"
+              />
+              <StatCard
+                title="Impostos"
+                value={formatBRL(pj2Impostos)}
+                icon={<Receipt size={14} />}
+                color="amber"
+              />
+              <StatCard
+                title="Desp + Impostos"
+                value={formatBRL(pj2DespeJustMaisImp)}
+                icon={<ArrowUpRight size={14} />}
+                color="red"
+              />
+              <StatCard
+                title="Lucro da Empresa"
+                value={formatBRL(pj2Lucro)}
+                icon={<TrendingUp size={14} />}
+                color={pj2Lucro >= 0 ? 'green' : 'red'}
+              />
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <StatCard title="Lucro Ramon" value={formatBRL(lucroSocio)} icon={<DollarSign size={20} />} accent />
-            <StatCard title="Lucro Mano" value={formatBRL(lucroSocio)} icon={<DollarSign size={20} />} accent />
+          {/* Partner split */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <StatCard
+              title="Lucro Ramon (50%)"
+              value={formatBRL(pj2Lucro / 2)}
+              icon={<Wallet size={14} />}
+              color="purple"
+            />
+            <StatCard
+              title="Lucro Mano (50%)"
+              value={formatBRL(pj2Lucro / 2)}
+              icon={<Wallet size={14} />}
+              color="purple"
+            />
           </div>
 
-          {/* Upcoming payments */}
-          {upcomingPayments.length > 0 && (
-            <div className="bg-zinc-900 border border-amber-500/20 rounded-xl">
-              <div className="p-5 border-b border-zinc-800 flex items-center gap-2">
-                <AlertCircle size={18} className="text-amber-400" />
-                <h3 className="text-white font-semibold">Próximos Vencimentos (30 dias)</h3>
-                <span className="ml-auto text-amber-400 text-sm font-medium">{upcomingPayments.length} cliente{upcomingPayments.length > 1 ? 's' : ''}</span>
+          {/* Payment Status */}
+          <div>
+            <p className="text-zinc-500 text-xs font-medium uppercase tracking-wider mb-3">Status de Pagamentos</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="bg-zinc-900 border border-white/5 rounded-2xl p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <CheckCircle2 size={14} className="text-green-400" />
+                  <span className="text-zinc-400 text-xs font-medium uppercase tracking-wide">Recebido</span>
+                </div>
+                <p className="text-xl font-bold text-green-400 tabular-nums">{formatBRL(pj2Recebido)}</p>
+                <p className="text-zinc-500 text-xs mt-1">
+                  {pj2Filtered.filter(s => s.pago).length} de {pj2Filtered.length} serviços
+                </p>
               </div>
-              <div className="divide-y divide-zinc-800">
+              <div className="bg-zinc-900 border border-white/5 rounded-2xl p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Clock size={14} className="text-amber-400" />
+                  <span className="text-zinc-400 text-xs font-medium uppercase tracking-wide">A Receber</span>
+                </div>
+                <p className="text-xl font-bold text-amber-400 tabular-nums">{formatBRL(pj2AReceber)}</p>
+                <p className="text-zinc-500 text-xs mt-1">
+                  {pj2Filtered.filter(s => !s.pago).length} serviços pendentes
+                </p>
+              </div>
+              <div className="bg-zinc-900 border border-white/5 rounded-2xl p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <CheckCircle2 size={14} className="text-blue-400" />
+                  <span className="text-zinc-400 text-xs font-medium uppercase tracking-wide">Impostos Pagos</span>
+                </div>
+                <p className="text-xl font-bold text-blue-400 tabular-nums">{formatBRL(pj2ImpostosPagos)}</p>
+                <p className="text-zinc-500 text-xs mt-1">
+                  {pj2Filtered.filter(s => s.impostos_pagos).length} recolhidos
+                </p>
+              </div>
+              <div className="bg-zinc-900 border border-white/5 rounded-2xl p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <AlertCircle size={14} className="text-orange-400" />
+                  <span className="text-zinc-400 text-xs font-medium uppercase tracking-wide">Impostos a Pagar</span>
+                </div>
+                <p className="text-xl font-bold text-orange-400 tabular-nums">{formatBRL(pj2ImpostosAPagar)}</p>
+                <p className="text-zinc-500 text-xs mt-1">
+                  {pj2Filtered.filter(s => !s.impostos_pagos && Number(s.imposto) > 0).length} pendentes
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Chart */}
+          <div className="bg-zinc-900 border border-white/5 rounded-2xl p-5">
+            <h3 className="text-white font-semibold text-sm mb-1">Faturamento vs Lucro — últimos 6 meses</h3>
+            <p className="text-zinc-500 text-xs mb-5">Visão geral da empresa</p>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={chartData} barGap={4}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="mes" stroke="#52525b" tick={{ fontSize: 11, fill: '#71717a' }} />
+                <YAxis stroke="#52525b" tick={{ fontSize: 11, fill: '#71717a' }} tickFormatter={v => `R$${(v / 1000).toFixed(0)}k`} />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend wrapperStyle={{ fontSize: 12, color: '#71717a' }} />
+                <Bar dataKey="faturamento" name="Faturamento" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="despesas" name="Despesas" fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="impostos" name="Impostos" fill="#f59e0b" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="lucro" name="Lucro" fill="#22c55e" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Upcoming payments alert */}
+          {upcomingPayments.length > 0 && (
+            <div className="bg-zinc-900 border border-amber-500/15 rounded-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-white/5 flex items-center gap-2">
+                <AlertCircle size={15} className="text-amber-400" />
+                <h3 className="text-white font-semibold text-sm">Próximos Vencimentos</h3>
+                <span className="ml-auto bg-amber-500/10 text-amber-400 text-xs font-medium px-2 py-0.5 rounded-full">
+                  {upcomingPayments.length} em 30 dias
+                </span>
+              </div>
+              <div className="divide-y divide-white/5">
                 {upcomingPayments.map(s => {
                   const daysUntil = s.data_vencimento
                     ? Math.ceil((parseISO(s.data_vencimento).getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
@@ -280,12 +524,12 @@ export default function Dashboard() {
                     <div key={s.id} className="flex items-center justify-between px-5 py-3 gap-4">
                       <div className="flex-1 min-w-0">
                         <p className="text-white text-sm font-medium truncate">{s.descricao}</p>
-                        <p className="text-zinc-500 text-xs">{(s as any).cliente?.nome || 'Cliente não informado'}</p>
+                        <p className="text-zinc-500 text-xs mt-0.5">{s.cliente?.nome || 'Cliente não informado'}</p>
                       </div>
                       <div className="text-right flex-shrink-0">
-                        <p className="text-green-400 font-semibold text-sm">{formatBRL(Number(s.valor_fechado))}</p>
-                        <p className={`text-xs ${daysUntil <= 7 ? 'text-red-400' : 'text-amber-400'}`}>
-                          {daysUntil === 0 ? 'Hoje' : daysUntil === 1 ? 'Amanhã' : `${daysUntil} dias`}
+                        <p className="text-zinc-200 font-semibold text-sm tabular-nums">{formatBRL(Number(s.valor_fechado))}</p>
+                        <p className={`text-xs mt-0.5 ${daysUntil <= 3 ? 'text-red-400' : daysUntil <= 7 ? 'text-orange-400' : 'text-amber-400'}`}>
+                          {daysUntil === 0 ? 'Hoje' : daysUntil === 1 ? 'Amanhã' : `em ${daysUntil} dias`}
                         </p>
                       </div>
                     </div>
@@ -295,20 +539,49 @@ export default function Dashboard() {
             </div>
           )}
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-            <h3 className="text-white font-semibold mb-4">Lucro por Mês — Sociedade</h3>
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={groupByMonth(pj2Servicos.map(s => ({
-                data: s.data_vencimento || s.created_at?.split('T')[0],
-                valor: Number(s.valor_fechado) - Number(s.gastos) - Number(s.imposto),
-              })))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis dataKey="mes" stroke="#71717a" tick={{ fontSize: 12 }} />
-                <YAxis stroke="#71717a" tick={{ fontSize: 12 }} tickFormatter={v => `R$${(v/1000).toFixed(0)}k`} />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="total" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          {/* Services list for selected month */}
+          <div className="bg-zinc-900 border border-white/5 rounded-2xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
+              <h3 className="text-white font-semibold text-sm">Serviços de {format(selectedDate, 'MMMM', { locale: ptBR })}</h3>
+              <span className="text-zinc-500 text-xs">{pj2Filtered.length} serviço{pj2Filtered.length !== 1 ? 's' : ''}</span>
+            </div>
+            <div className="divide-y divide-white/5">
+              {pj2Filtered.length === 0 ? (
+                <p className="text-zinc-500 text-sm text-center py-10">Nenhum serviço neste mês</p>
+              ) : (
+                pj2Filtered.map(s => {
+                  const lucro = Number(s.valor_fechado) - Number(s.gastos) - Number(s.imposto)
+                  return (
+                    <div key={s.id} className="flex items-center justify-between px-5 py-3 hover:bg-white/[0.02] gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="text-white text-sm font-medium truncate">{s.descricao}</p>
+                          {s.pago ? (
+                            <span className="flex-shrink-0 flex items-center gap-1 text-xs text-green-400 bg-green-400/10 px-1.5 py-0.5 rounded-full">
+                              <CheckCircle2 size={10} /> Pago
+                            </span>
+                          ) : (
+                            <span className="flex-shrink-0 flex items-center gap-1 text-xs text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded-full">
+                              <Clock size={10} /> Pendente
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-zinc-500 text-xs mt-0.5">
+                          {s.cliente?.nome || '—'}
+                          {s.forma_pagamento ? ` · ${s.forma_pagamento}` : ''}
+                        </p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-zinc-200 text-sm font-medium tabular-nums">{formatBRL(Number(s.valor_fechado))}</p>
+                        <p className={`text-xs mt-0.5 tabular-nums ${lucro >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          Lucro: {formatBRL(lucro)}
+                        </p>
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
           </div>
         </div>
       )}
