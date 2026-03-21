@@ -27,6 +27,9 @@ export interface Pj1Receita {
   valor: number
   quem_pagou: string
   data: string
+  pago: boolean
+  recorrente: boolean
+  nota_emitida: boolean
   created_at: string
 }
 
